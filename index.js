@@ -1,45 +1,60 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
+const express = require("express");
+const fs = require("fs");
+const path = require("path");
+const cors = require("cors");
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Connect to MongoDB
-mongoose.connect('mongodb://127.0.0.1:27017/iot-fan', { useNewUrlParser: true, useUnifiedTopology: true });
+const DATA_FILE = path.join(__dirname, "schedule.json");
 
-const FanScheduleSchema = new mongoose.Schema({
-    startTime: String,
-    endTime: String,
-    fanState: Boolean
+// Helper function to read the JSON file
+function readSchedule() {
+    try {
+        const data = fs.readFileSync(DATA_FILE, "utf8");
+        return JSON.parse(data);
+    } catch (err) {
+        return { startTime: null, endTime: null, fanState: false };
+    }
+}
+
+// Helper function to write to the JSON file
+function writeSchedule(schedule) {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(schedule, null, 2), "utf8");
+}
+
+// API to set the fan schedule
+app.post("/set-schedule", (req, res) => {
+    const { startTime, endTime } = req.body;
+    const newSchedule = { startTime, endTime, fanState: false }; // Fan starts OFF
+
+    writeSchedule(newSchedule);
+    res.json({ message: "Schedule saved!", schedule: newSchedule });
 });
-
-const FanSchedule = mongoose.model('FanSchedule', FanScheduleSchema);
-
-// API to set schedule
-app.get('/', async (req ,res)=> {
-    res.send("Working")
+app.get("/", (req, res) => {
+    res.send("working")
 })
-app.post('/set-schedule', async (req, res) => {
-    const { startTime, endTime, fanState } = req.body;
-    await FanSchedule.deleteMany({});
-    const schedule = new FanSchedule({ startTime, endTime, fanState });
-    await schedule.save();
-    res.send({ message: "Schedule updated" });
-});
+// API for ESP32 to fetch schedule and check fan state
+app.get("/get-schedule", (req, res) => {
+    const schedule = readSchedule();
+    const currentTime = new Date().toLocaleTimeString("en-US", { hour12: false }).slice(0, 5);
 
-// API for ESP32 to get the latest fan state
-app.get('/get-schedule', async (req, res) => {
-    const schedule = await FanSchedule.findOne();
-    if (!schedule) {
-        return res.json({ fanState: false });
+    // Check if current time is within the scheduled range
+    if (schedule.startTime && schedule.endTime) {
+        if (schedule.startTime <= currentTime && currentTime <= schedule.endTime) {
+            schedule.fanState = true;  // Turn fan ON
+        } else {
+            schedule.fanState = false; // Turn fan OFF
+        }
+    } else {
+        schedule.fanState = false; // Default OFF if no schedule is set
     }
 
-    const currentTime = new Date().toLocaleTimeString('en-US', { hour12: false });
-    const fanShouldBeOn = (currentTime >= schedule.startTime && currentTime <= schedule.endTime);
-    
-    res.json({ fanState: fanShouldBeOn });
+    res.json(schedule);
 });
 
-app.listen(3000, () => console.log('Server running on port 3000'));
+const PORT = 3000;
+app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+});
